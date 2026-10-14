@@ -340,13 +340,16 @@ module Psych
   end
 
   # Writes a value as YAML the way Psych's YAMLTree does for data: Hashes
-  # and Arrays in block style, each scalar in the style Psych picks for it.
+  # and Arrays in block style, each scalar in the style Psych picks for it,
+  # and a Hash or Array met a second time as an alias of the first (&1, *1,
+  # numbered in the order the repeats are met).
   class Dumper
     EVENT_FIELDS = 8
     STREAM_START = 1
     STREAM_END = 2
     DOCUMENT_START = 3
     DOCUMENT_END = 4
+    ALIAS = 5
     SCALAR = 6
     SEQUENCE_START = 7
     SEQUENCE_END = 8
@@ -363,9 +366,14 @@ module Psych
     def initialize
       @events = []
       @scanner = ScalarScanner.new([Symbol], true)
+      @seen = {}
+      @anchor_ids = {}
+      @count = 0
+      @emitted = {}
     end
 
     def dump(o)
+      number_repeats(o)
       event(STREAM_START, nil, nil, nil, 0, 0, 0, 0)
       event(DOCUMENT_START, nil, nil, nil, 0, 0, 0, 0)
       accept(o)
@@ -376,6 +384,27 @@ module Psych
 
     def event(type, value, anchor, tag, plain, quoted, style, implicit)
       @events << type << value << anchor << tag << plain << quoted << style << implicit
+    end
+
+    # The anchor numbers, walking in the order accept emits: a Hash or Array
+    # met again takes the next number the first time it repeats, and its
+    # contents are not walked again.
+    def number_repeats(o)
+      return unless o.is_a?(Hash) || o.is_a?(Array)
+      id = o.object_id
+      if @seen.key?(id)
+        @anchor_ids[id] = (@count += 1) unless @anchor_ids.key?(id)
+        return
+      end
+      @seen[id] = true
+      if o.is_a?(Hash)
+        o.each do |k, v|
+          number_repeats(k)
+          number_repeats(v)
+        end
+      else
+        o.each { |v| number_repeats(v) }
+      end
     end
 
     def accept(o)
@@ -399,7 +428,14 @@ module Psych
     end
 
     def collection(o, start_type, end_type)
-      event(start_type, nil, nil, nil, 0, 0, BLOCK, 1)
+      id = o.object_id
+      if @emitted.key?(id)
+        event(ALIAS, @anchor_ids[id].to_s, nil, nil, 0, 0, 0, 0)
+        return
+      end
+      @emitted[id] = true
+      anchor = @anchor_ids.key?(id) ? @anchor_ids[id].to_s : nil
+      event(start_type, nil, anchor, nil, 0, 0, BLOCK, 1)
       if o.is_a?(Hash)
         o.each do |k, v|
           accept(k)
