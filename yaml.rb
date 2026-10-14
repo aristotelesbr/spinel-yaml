@@ -108,6 +108,18 @@ module Psych
     documents.empty? ? fallback : documents
   end
 
+  # Every document read as safe_load reads one. With a block each document
+  # is yielded instead, and the answer is nil.
+  def self.safe_load_stream(yaml, filename: nil, permitted_classes: [], aliases: false)
+    scanner = ScalarScanner.new(permitted_classes)
+    loader = Loader.new(Psych.events(yaml, 1), filename, scanner, aliases: aliases)
+    documents = []
+    documents << loader.document while loader.document?
+    return documents unless block_given?
+    documents.each { |d| yield d }
+    nil
+  end
+
   def self.unsafe_loader(events, filename, symbolize_names, freeze, strict_integer, parse_symbols)
     scanner = ScalarScanner.new([Symbol], unsafe: true, strict_integer: strict_integer, parse_symbols: parse_symbols)
     Loader.new(events, filename, scanner, aliases: true, symbolize_names: symbolize_names, freeze: freeze, unsafe: true)
@@ -121,7 +133,27 @@ module Psych
       options = io
       io = nil
     end
-    text = Dumper.new(options).dump(o)
+    write(Dumper.new(options).dump(o), io)
+  end
+
+  # dump that refuses what safe_load would: classes other than true, false,
+  # nil, Integer, Float, String, Array and Hash unless permitted_classes
+  # names them, Symbols unless permitted, and a repeated Hash or Array
+  # unless aliases: true.
+  def self.safe_dump(o, io = nil, options = {})
+    if io.is_a?(Hash)
+      options = io
+      io = nil
+    end
+    write(Dumper.new(options, true).dump(o), io)
+  end
+
+  # One document per object.
+  def self.dump_stream(*objects)
+    Dumper.new.dump_stream(objects)
+  end
+
+  def self.write(text, io)
     return text if io.nil?
     io.write(text)
     io
@@ -421,7 +453,8 @@ module Psych
     end
   end
 
-  # Writes a value as YAML the way Psych's YAMLTree does for data: Hashes
+  # Writes a value as YAML the way Psych's YAMLTree does for data -- or, when
+  # restricted, its RestrictedYAMLTree: Hashes
   # and Arrays in block style, each scalar in the style Psych picks for it,
   # and a Hash or Array met a second time as an alias of the first (&1, *1,
   # numbered in the order the repeats are met).
@@ -446,7 +479,13 @@ module Psych
     FOLDED = 5
     BLOCK = 1
 
-    def initialize(options = {})
+    DEFAULT_PERMITTED = [TrueClass, FalseClass, NilClass, Integer, Float, String, Array, Hash]
+
+    def initialize(options = {}, restricted = false)
+      @restricted = restricted
+      @permitted_classes = DEFAULT_PERMITTED + (options[:permitted_classes] || [])
+      @permitted_symbols = options[:permitted_symbols] || []
+      @aliases = options[:aliases] || false
       @line_width = options[:line_width]
       if @line_width && @line_width < 0
         raise ArgumentError, "Invalid line_width #{@line_width}, must be non-negative or -1 for unlimited." unless @line_width == -1
@@ -466,11 +505,19 @@ module Psych
     end
 
     def dump(o)
-      number_repeats(o)
+      dump_stream([o])
+    end
+
+    # Anchors are numbered across the whole stream, as Psych's one visitor
+    # does.
+    def dump_stream(objects)
+      objects.each { |o| number_repeats(o) }
       event(STREAM_START, nil, nil, nil, 0, 0, 0, 0)
-      event(DOCUMENT_START, @version, nil, nil, 0, 0, 0, 0)
-      accept(o)
-      event(DOCUMENT_END, nil, nil, nil, 0, 0, 0, 1)
+      objects.each do |o|
+        event(DOCUMENT_START, @version, nil, nil, 0, 0, 0, 0)
+        accept(o)
+        event(DOCUMENT_END, nil, nil, nil, 0, 0, 0, 1)
+      end
       event(STREAM_END, nil, nil, nil, 0, 0, 0, 0)
       Psych.emit(@events, @width, @indent, @canonical)
     end
@@ -512,6 +559,7 @@ module Psych
     end
 
     def accept(o)
+      restrict(o) if @restricted
       if o.is_a?(Hash)
         collection(o, MAPPING_START, MAPPING_END)
       elsif o.is_a?(Array)
@@ -528,6 +576,19 @@ module Psych
         event(SCALAR, o.to_s, nil, nil, 1, 0, ANY, 0)
       else
         raise NotImplementedError, "yaml: a #{o.class} is not dumped"
+      end
+    end
+
+    def restrict(o)
+      if !@aliases && (o.is_a?(Hash) || o.is_a?(Array)) && @emitted.key?(o.object_id)
+        raise BadAlias, "Tried to dump an aliased object"
+      end
+      if o.is_a?(Symbol)
+        unless @permitted_classes.include?(Symbol) || @permitted_symbols.include?(o)
+          raise DisallowedClass.new("dump", "Symbol(#{o.inspect})")
+        end
+      elsif !@permitted_classes.include?(o.class)
+        raise DisallowedClass.new("dump", o.class.name)
       end
     end
 
