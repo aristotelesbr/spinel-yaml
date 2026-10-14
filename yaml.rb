@@ -60,6 +60,7 @@ module Psych
 
   native_lib "yaml"
   native_func :events, [:string, :int], :any, "spinel_yaml_events"
+  native_func :emit, [:any], :string, "spinel_yaml_emit"
 
   def self.load(yaml, permitted_classes: [Symbol], aliases: false, filename: nil,
                 fallback: nil, symbolize_names: false)
