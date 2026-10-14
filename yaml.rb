@@ -76,6 +76,23 @@ module Psych
     loader.document? ? loader.document : fallback
   end
 
+  # Every document of a stream, read as load reads one but with aliases and
+  # Symbols allowed (Psych builds each with to_ruby, outside safe_load). With
+  # a block each document is yielded instead, and the answer is nil.
+  def self.load_stream(yaml, filename: nil, fallback: [], symbolize_names: false)
+    loader = Loader.new(Psych.events(yaml, 1), filename, [Symbol], true, symbolize_names, true)
+    documents = []
+    while loader.document?
+      if block_given?
+        yield loader.document
+      else
+        documents << loader.document
+      end
+    end
+    return nil if block_given?
+    documents.empty? ? fallback : documents
+  end
+
   def self.dump(o)
     Dumper.new.dump(o)
   end
@@ -100,10 +117,12 @@ module Psych
     INTEGER = /^(?:[-+]?0b[_,]*[0-1][0-1_,]*|[-+]?0[_,]*[0-7][0-7_,]*|[-+]?(?:0|[1-9](?:[0-9]|,[0-9]|_[0-9])*)|[-+]?0x[_,]*[0-9a-fA-F][0-9a-fA-F_,]*)$/
 
     # A dumping scanner only tells Strings from the rest: a Date or a
-    # Symbol is not a String, and nothing is refused.
-    def initialize(permitted_classes, dumping = false)
+    # Symbol is not a String, and nothing is refused. An unsafe one refuses
+    # no class, so a Date or Time it cannot build is not read.
+    def initialize(permitted_classes, dumping = false, unsafe = false)
       @permitted_classes = permitted_classes
       @dumping = dumping
+      @unsafe = unsafe
     end
 
     def tokenize(string)
@@ -195,8 +214,8 @@ module Psych
 
     def disallow(klass_name)
       return false if @dumping
-      if klass_name == "Time" && @permitted_classes.include?(Time)
-        raise NotImplementedError, "yaml: a Time value is not read; quote it to load it as a String"
+      if @unsafe || (klass_name == "Time" && @permitted_classes.include?(Time))
+        raise NotImplementedError, "yaml: a #{klass_name} value is not read; quote it to load it as a String"
       end
       raise DisallowedClass.new("load", klass_name)
     end
@@ -209,6 +228,7 @@ module Psych
     EVENT_ERROR = -1
     STREAM_END = 2
     DOCUMENT_START = 3
+    DOCUMENT_END = 4
     ALIAS = 5
     SCALAR = 6
     SEQUENCE_START = 7
@@ -218,12 +238,15 @@ module Psych
 
     STR_TAG = "tag:yaml.org,2002:str"
 
-    def initialize(events, filename, permitted_classes, aliases, symbolize_names)
+    # An unsafe loader reads as to_ruby does, outside safe_load: what it
+    # refuses is only what it cannot build.
+    def initialize(events, filename, permitted_classes, aliases, symbolize_names, unsafe = false)
       @events = events
       @filename = filename
       @aliases = aliases
       @symbolize_names = symbolize_names
-      @scanner = ScalarScanner.new(permitted_classes)
+      @unsafe = unsafe
+      @scanner = ScalarScanner.new(permitted_classes, false, unsafe)
       @anchors = {}
       @i = 0
       raise_syntax_error if @events.size >= EVENT_FIELDS && type_at(@events.size - EVENT_FIELDS) == EVENT_ERROR
@@ -235,9 +258,14 @@ module Psych
       @i < @events.size && type_at(@i) == DOCUMENT_START
     end
 
+    # The value of the document at @i, leaving @i at the next one. Anchors
+    # belong to their document.
     def document
+      @anchors = {}
       @i += EVENT_FIELDS
-      node
+      value = node
+      @i += EVENT_FIELDS if @i < @events.size && type_at(@i) == DOCUMENT_END
+      value
     end
 
     def type_at(i)
@@ -332,7 +360,7 @@ module Psych
     # Tags that build objects: !ruby/object is a disallowed class, as in
     # safe_load; the rest are not read.
     def unsupported_tag(tag)
-      if tag.start_with?("!ruby/object:")
+      if tag.start_with?("!ruby/object:") && !@unsafe
         raise DisallowedClass.new("load", tag[13, tag.length - 13])
       end
       raise NotImplementedError, "yaml: the tag #{tag} is not read"
