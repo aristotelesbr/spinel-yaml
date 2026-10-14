@@ -9,6 +9,7 @@
 - `unsafe_load` / `unsafe_load_file`, with aliases and Symbols allowed
 - `load_stream` for every document of a stream, read without the `safe_load` restrictions as in Psych (with a block, each document is yielded and the answer is `nil`)
 - `YAML.dump` and `Object#to_yaml` for Hashes, Arrays and scalars, in the style Psych's `YAMLTree` picks for each (quoted when a String would read back as something else, literal blocks for multi line Strings, `&1` / `*1` for a repeated Hash or Array)
+- Psych's dump options: `line_width:`, `indentation:`, `canonical:`, `header:`, `version:`, `stringify_names:`, and an IO to write to
 
 Under CRuby, `require "yaml"` of this package hands over to the real Psych, which makes `spin test` compare this implementation against Psych.
 
@@ -21,7 +22,7 @@ yaml = { git = "https://github.com/aristotelesbr/spinel-yaml" }
 
 ## Not supported yet
 
-- Dumping objects other than Hash, Array, String, Symbol, Integer, Float, true, false and nil, binary Strings, and dump options (`line_width:`, `indentation:`, `header:`, an IO argument)
+- Dumping objects other than Hash, Array, String, Symbol, Integer, Float, true, false and nil, and binary Strings
 - Date and Time values (`Psych::DisallowedClass`, as with `load`; Spinel has no Date class yet)
 - Tags that build objects (`!ruby/object` raises `Psych::DisallowedClass`, other `!ruby/...`, `!binary`, `!set` and `!omap` raise `NotImplementedError`)
 - `parse` and the node tree, `safe_load_stream`

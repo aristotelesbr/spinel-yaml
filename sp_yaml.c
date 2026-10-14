@@ -19,11 +19,13 @@
 
    Events to emit (spinel_yaml_emit): type, value, anchor, tag, plain,
    quoted, style, implicit -- the arguments of libyaml's event
-   initializers, with an alias's anchor in value. */
+   initializers, with an alias's anchor in value and a document's
+   "major.minor" version directive in value. */
 #include "spinel/runtime.h"
 #include "yaml.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #define EVENT_FIELDS 8
 #define EVENT_ERROR -1
@@ -173,8 +175,12 @@ static int make_event(yaml_event_t *e, sp_RbVal events, sp_int i) {
     return yaml_stream_start_event_initialize(e, YAML_UTF8_ENCODING);
   case YAML_STREAM_END_EVENT:
     return yaml_stream_end_event_initialize(e);
-  case YAML_DOCUMENT_START_EVENT:
+  case YAML_DOCUMENT_START_EVENT: {
+    yaml_version_directive_t version;
+    if (value && sscanf((const char *)value, "%d.%d", &version.major, &version.minor) == 2)
+      return yaml_document_start_event_initialize(e, &version, NULL, NULL, implicit);
     return yaml_document_start_event_initialize(e, NULL, NULL, NULL, implicit);
+  }
   case YAML_DOCUMENT_END_EVENT:
     return yaml_document_end_event_initialize(e, implicit);
   case YAML_ALIAS_EVENT:
@@ -197,13 +203,16 @@ static int make_event(yaml_event_t *e, sp_RbVal events, sp_int i) {
 }
 
 /* The text libyaml's emitter writes for events, set up as Psych's emitter
-   is: unicode output, two-space indentation. */
-const char *spinel_yaml_emit(sp_RbVal events) {
+   is: unicode output, then the line width, indentation and canonical form
+   (0, 2 and 0 are libyaml's own defaults; a width of -1 is unlimited). */
+const char *spinel_yaml_emit(sp_RbVal events, sp_int width, sp_int indent, sp_int canonical) {
   SP_GC_ROOT_RBVAL(events);
   yaml_emitter_t emitter;
   if (!yaml_emitter_initialize(&emitter)) sp_oom_die();
   yaml_emitter_set_unicode(&emitter, 1);
-  yaml_emitter_set_indent(&emitter, 2);
+  yaml_emitter_set_width(&emitter, (int)width);
+  yaml_emitter_set_indent(&emitter, (int)indent);
+  yaml_emitter_set_canonical(&emitter, (int)canonical);
   outbuf out = { NULL, 0, 0 };
   yaml_emitter_set_output(&emitter, write_out, &out);
 

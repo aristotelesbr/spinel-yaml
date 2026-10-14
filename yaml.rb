@@ -62,7 +62,7 @@ module Psych
 
   native_lib "yaml"
   native_func :events, [:string, :int], :any, "spinel_yaml_events"
-  native_func :emit, [:any], :string, "spinel_yaml_emit"
+  native_func :emit, [:any, :int, :int, :int], :string, "spinel_yaml_emit"
 
   def self.load(yaml, permitted_classes: [Symbol], permitted_symbols: [], aliases: false, filename: nil,
                 fallback: nil, symbolize_names: false, freeze: false, strict_integer: false, parse_symbols: true)
@@ -113,8 +113,18 @@ module Psych
     Loader.new(events, filename, scanner, aliases: true, symbolize_names: symbolize_names, freeze: freeze, unsafe: true)
   end
 
-  def self.dump(o)
-    Dumper.new.dump(o)
+  # Psych's dump options: line_width, indentation, canonical, header,
+  # version and stringify_names. With an IO the text is written to it and
+  # the IO is the answer.
+  def self.dump(o, io = nil, options = {})
+    if io.is_a?(Hash)
+      options = io
+      io = nil
+    end
+    text = Dumper.new(options).dump(o)
+    return text if io.nil?
+    io.write(text)
+    io
   end
 
   def self.load_file(filename, permitted_classes: [Symbol], permitted_symbols: [], aliases: false,
@@ -433,9 +443,20 @@ module Psych
     SINGLE_QUOTED = 2
     DOUBLE_QUOTED = 3
     LITERAL = 4
+    FOLDED = 5
     BLOCK = 1
 
-    def initialize
+    def initialize(options = {})
+      @line_width = options[:line_width]
+      if @line_width && @line_width < 0
+        raise ArgumentError, "Invalid line_width #{@line_width}, must be non-negative or -1 for unlimited." unless @line_width == -1
+        @line_width = nil
+      end
+      @width = options.key?(:line_width) ? options[:line_width] : 0
+      @indent = options.key?(:indentation) ? options[:indentation] : 2
+      @canonical = options[:canonical] ? 1 : 0
+      @version = version_directive(options)
+      @stringify_names = options[:stringify_names]
       @events = []
       @scanner = ScalarScanner.new([Symbol], dumping: true)
       @seen = {}
@@ -447,11 +468,22 @@ module Psych
     def dump(o)
       number_repeats(o)
       event(STREAM_START, nil, nil, nil, 0, 0, 0, 0)
-      event(DOCUMENT_START, nil, nil, nil, 0, 0, 0, 0)
+      event(DOCUMENT_START, @version, nil, nil, 0, 0, 0, 0)
       accept(o)
       event(DOCUMENT_END, nil, nil, nil, 0, 0, 0, 1)
       event(STREAM_END, nil, nil, nil, 0, 0, 0, 0)
-      Psych.emit(@events)
+      Psych.emit(@events, @width, @indent, @canonical)
+    end
+
+    # "1.1" for header: true, or the version option as Psych reads it.
+    def version_directive(options)
+      if options.key?(:version)
+        v = options[:version]
+        return "#{v[0]}.#{v[1]}" if v.is_a?(Array)
+        return v.split(".").map(&:to_i).join(".") if v.is_a?(String)
+        return "1.1"
+      end
+      options[:header] ? "1.1" : nil
     end
 
     def event(type, value, anchor, tag, plain, quoted, style, implicit)
@@ -510,7 +542,7 @@ module Psych
       event(start_type, nil, anchor, nil, 0, 0, BLOCK, 1)
       if o.is_a?(Hash)
         o.each do |k, v|
-          accept(k)
+          accept(@stringify_names && k.is_a?(Symbol) ? k.to_s : k)
           accept(v)
         end
       else
@@ -538,6 +570,8 @@ module Psych
         quoted = 0
       elsif o == "y" || o == "Y" || o == "n" || o == "N"
         style = DOUBLE_QUOTED
+      elsif @line_width && o.length > @line_width
+        style = FOLDED
       elsif o.match?(/^[^[:word:]][^"]*$/)
         style = DOUBLE_QUOTED
       elsif !@scanner.tokenize(o).is_a?(String) || o.match?(/\A0[0-7]*[89]/)
@@ -568,8 +602,8 @@ module Psych
 end
 
 class Object
-  def to_yaml
-    Psych.dump(self)
+  def to_yaml(options = {})
+    Psych.dump(self, options)
   end
 end
 
