@@ -1,10 +1,12 @@
-# yaml -- YAML.load for Spinel, over the vendored libyaml 0.2.5.
+# yaml -- YAML.load / YAML.dump for Spinel, over the vendored libyaml 0.2.5.
 #
-# libyaml reads the text (sp_yaml.c hands its parser events over as they
-# are); this file turns the events into Ruby values the way Psych does:
-# scalars typed by the YAML 1.1 rules, Hashes and Arrays, anchors and
-# aliases, << merge keys, and the load / safe_load restrictions with Psych's
-# exception classes and messages. See README.md for what is not covered yet.
+# libyaml reads and writes the text (sp_yaml.c passes its events through
+# as they are); this file turns parser events into Ruby values the way
+# Psych does -- scalars typed by the YAML 1.1 rules, Hashes and Arrays,
+# anchors and aliases, << merge keys, and the load / safe_load restrictions
+# with Psych's exception classes and messages -- and Ruby values into
+# emitter events with Psych's choice of style for each scalar. See
+# README.md for what is not covered yet.
 
 # Under CRuby (spin test's oracle, or a program run with plain `ruby`) this
 # file shadows the stdlib's yaml.rb, so hand over to the real Psych. Spinel
@@ -74,6 +76,10 @@ module Psych
     loader.document? ? loader.document : fallback
   end
 
+  def self.dump(o)
+    Dumper.new.dump(o)
+  end
+
   def self.load_file(filename, permitted_classes: [Symbol], aliases: false,
                      fallback: nil, symbolize_names: false)
     load(File.read(filename), permitted_classes: permitted_classes, aliases: aliases,
@@ -93,8 +99,11 @@ module Psych
     FLOAT = /^(?:[-+]?([0-9][0-9_,]*)?\.[0-9]*([eE][-+][0-9]+)?)$/
     INTEGER = /^(?:[-+]?0b[_,]*[0-1][0-1_,]*|[-+]?0[_,]*[0-7][0-7_,]*|[-+]?(?:0|[1-9](?:[0-9]|,[0-9]|_[0-9])*)|[-+]?0x[_,]*[0-9a-fA-F][0-9a-fA-F_,]*)$/
 
-    def initialize(permitted_classes)
+    # A dumping scanner only tells Strings from the rest: a Date or a
+    # Symbol is not a String, and nothing is refused.
+    def initialize(permitted_classes, dumping = false)
       @permitted_classes = permitted_classes
+      @dumping = dumping
     end
 
     def tokenize(string)
@@ -179,11 +188,13 @@ module Psych
     end
 
     def symbol(name)
+      return name.to_sym if @dumping
       raise DisallowedClass.new("load", "Symbol") unless @permitted_classes.include?(Symbol)
       name.to_sym
     end
 
     def disallow(klass_name)
+      return false if @dumping
       if klass_name == "Time" && @permitted_classes.include?(Time)
         raise NotImplementedError, "yaml: a Time value is not read; quote it to load it as a String"
       end
@@ -325,6 +336,125 @@ module Psych
         raise DisallowedClass.new("load", tag[13, tag.length - 13])
       end
       raise NotImplementedError, "yaml: the tag #{tag} is not read"
+    end
+  end
+
+  # Writes a value as YAML the way Psych's YAMLTree does for data: Hashes
+  # and Arrays in block style, each scalar in the style Psych picks for it.
+  class Dumper
+    EVENT_FIELDS = 8
+    STREAM_START = 1
+    STREAM_END = 2
+    DOCUMENT_START = 3
+    DOCUMENT_END = 4
+    SCALAR = 6
+    SEQUENCE_START = 7
+    SEQUENCE_END = 8
+    MAPPING_START = 9
+    MAPPING_END = 10
+
+    ANY = 0
+    PLAIN = 1
+    SINGLE_QUOTED = 2
+    DOUBLE_QUOTED = 3
+    LITERAL = 4
+    BLOCK = 1
+
+    def initialize
+      @events = []
+      @scanner = ScalarScanner.new([Symbol], true)
+    end
+
+    def dump(o)
+      event(STREAM_START, nil, nil, nil, 0, 0, 0, 0)
+      event(DOCUMENT_START, nil, nil, nil, 0, 0, 0, 0)
+      accept(o)
+      event(DOCUMENT_END, nil, nil, nil, 0, 0, 0, 1)
+      event(STREAM_END, nil, nil, nil, 0, 0, 0, 0)
+      Psych.emit(@events)
+    end
+
+    def event(type, value, anchor, tag, plain, quoted, style, implicit)
+      @events << type << value << anchor << tag << plain << quoted << style << implicit
+    end
+
+    def accept(o)
+      if o.is_a?(Hash)
+        collection(o, MAPPING_START, MAPPING_END)
+      elsif o.is_a?(Array)
+        collection(o, SEQUENCE_START, SEQUENCE_END)
+      elsif o.is_a?(String)
+        string(o)
+      elsif o.nil?
+        event(SCALAR, "", nil, "tag:yaml.org,2002:null", 1, 0, ANY, 0)
+      elsif o.is_a?(Symbol)
+        symbol(o)
+      elsif o.is_a?(Float)
+        float(o)
+      elsif o.is_a?(Integer) || o == true || o == false
+        event(SCALAR, o.to_s, nil, nil, 1, 0, ANY, 0)
+      else
+        raise NotImplementedError, "yaml: a #{o.class} is not dumped"
+      end
+    end
+
+    def collection(o, start_type, end_type)
+      event(start_type, nil, nil, nil, 0, 0, BLOCK, 1)
+      if o.is_a?(Hash)
+        o.each do |k, v|
+          accept(k)
+          accept(v)
+        end
+      else
+        o.each { |v| accept(v) }
+      end
+      event(end_type, nil, nil, nil, 0, 0, 0, 0)
+    end
+
+    # A String that would read back as something else is quoted; one with a
+    # line break inside is a literal block.
+    def string(o)
+      if o.encoding == Encoding::BINARY && !o.ascii_only?
+        raise NotImplementedError, "yaml: a binary String is not dumped"
+      end
+      plain = 1
+      quoted = 1
+      tag = nil
+      style = PLAIN
+      if o.match?(/\n(?!\Z)/)
+        style = LITERAL
+      elsif o == "<<"
+        style = SINGLE_QUOTED
+        tag = "tag:yaml.org,2002:str"
+        plain = 0
+        quoted = 0
+      elsif o == "y" || o == "Y" || o == "n" || o == "N"
+        style = DOUBLE_QUOTED
+      elsif o.match?(/^[^[:word:]][^"]*$/)
+        style = DOUBLE_QUOTED
+      elsif !@scanner.tokenize(o).is_a?(String) || o.match?(/\A0[0-7]*[89]/)
+        style = SINGLE_QUOTED
+      end
+      event(SCALAR, o, nil, tag, plain, quoted, style, 0)
+    end
+
+    def symbol(o)
+      if o.empty?
+        event(SCALAR, "", nil, "!ruby/symbol", 0, 0, ANY, 0)
+      else
+        event(SCALAR, ":#{o}", nil, nil, 1, 0, ANY, 0)
+      end
+    end
+
+    def float(o)
+      text = if o.nan?
+               ".nan"
+             elsif o.infinite?
+               o > 0 ? ".inf" : "-.inf"
+             else
+               o.to_s
+             end
+      event(SCALAR, text, nil, nil, 1, 0, ANY, 0)
     end
   end
 end
