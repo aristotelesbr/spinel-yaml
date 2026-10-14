@@ -24,7 +24,7 @@ jobs:
           - macos-15
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Choose Spinel revision
         id: spinel
@@ -39,7 +39,7 @@ jobs:
       # Outside the checkout, or spin test would take Spinel's own sources as the package's
       - name: Restore Spinel
         id: spinel-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/spinel-toolchain
           key: spinel-${{ runner.os }}-${{ runner.arch }}-${{ steps.spinel.outputs.revision }}
@@ -70,4 +70,11 @@ jobs:
       - name: Spin test under GC stress
         env:
           SPINEL_GC_STRESS: "1"
+        run: spin test
+
+      # =2 collects at every allocation that can and quarantines freed slots, so a mark
+      # that reaches one fails loudly
+      - name: Spin test under GC stress with quarantine
+        env:
+          SPINEL_GC_STRESS: "2"
         run: spin test
