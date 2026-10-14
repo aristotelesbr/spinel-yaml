@@ -6,6 +6,7 @@
 - Hashes with any scalar key (`1: one`, `true: t`), Arrays, anchors and aliases, merge keys (`<<: *defaults`)
 - Psych's load modes: `load` / `load_file` / `safe_load` / `safe_load_file` refuse aliases unless `aliases: true`, `safe_load` refuses Symbol unless permitted, both refuse Date / Time and object tags, with Psych's exception classes and messages (`Psych::SyntaxError` carries libyaml's problem, context, line and column)
 - `symbolize_names:`, `fallback:`, `filename:`
+- `unsafe_load` / `unsafe_load_file`, with aliases and Symbols allowed
 - `load_stream` for every document of a stream, read without the `safe_load` restrictions as in Psych (with a block, each document is yielded and the answer is `nil`)
 - `YAML.dump` and `Object#to_yaml` for Hashes, Arrays and scalars, in the style Psych's `YAMLTree` picks for each (quoted when a String would read back as something else, literal blocks for multi line Strings, `&1` / `*1` for a repeated Hash or Array)
 
@@ -23,7 +24,7 @@ yaml = { git = "https://github.com/aristotelesbr/spinel-yaml" }
 - Dumping objects other than Hash, Array, String, Symbol, Integer, Float, true, false and nil, binary Strings, and dump options (`line_width:`, `indentation:`, `header:`, an IO argument)
 - Date and Time values (`Psych::DisallowedClass`, as with `load`; Spinel has no Date class yet)
 - Tags that build objects (`!ruby/object` raises `Psych::DisallowedClass`, other `!ruby/...`, `!binary`, `!set` and `!omap` raise `NotImplementedError`)
-- `unsafe_load`, `parse`, `permitted_symbols:`, `freeze:`
+- `parse`, `permitted_symbols:`, `freeze:`
 
 ## Layout
 

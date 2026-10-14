@@ -76,6 +76,14 @@ module Psych
     loader.document? ? loader.document : fallback
   end
 
+  # The first document, read without the safe_load restrictions: aliases
+  # and Symbols are allowed, and only what this package cannot build
+  # (Date, Time, objects) raises.
+  def self.unsafe_load(yaml, filename: nil, fallback: false, symbolize_names: false)
+    loader = Loader.new(Psych.events(yaml, 0), filename, [Symbol], true, symbolize_names, true)
+    loader.document? ? loader.document : fallback
+  end
+
   # Every document of a stream, read as load reads one but with aliases and
   # Symbols allowed (Psych builds each with to_ruby, outside safe_load). With
   # a block each document is yielded instead, and the answer is nil.
@@ -95,6 +103,10 @@ module Psych
 
   def self.dump(o)
     Dumper.new.dump(o)
+  end
+
+  def self.unsafe_load_file(filename, fallback: false, symbolize_names: false)
+    unsafe_load(File.read(filename), filename: filename, fallback: fallback, symbolize_names: symbolize_names)
   end
 
   def self.load_file(filename, permitted_classes: [Symbol], aliases: false,
