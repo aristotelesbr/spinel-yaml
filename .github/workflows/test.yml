@@ -1,0 +1,73 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  # Spinel master moves daily; this run says when it stops compiling the package
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+env:
+  # The Spinel revision this package is tested with, see README.md
+  SPINEL_REVISION: 6f88ebcc381acc751d0f01dbdd1fa4943a1cd594
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-24.04
+          - macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Choose Spinel revision
+        id: spinel
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            revision=$(git ls-remote https://github.com/matz/spinel refs/heads/master | cut -f1)
+          else
+            revision=$SPINEL_REVISION
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+
+      # Outside the checkout, or spin test would take Spinel's own sources as the package's
+      - name: Restore Spinel
+        id: spinel-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/spinel-toolchain
+          key: spinel-${{ runner.os }}-${{ runner.arch }}-${{ steps.spinel.outputs.revision }}
+
+      - name: Build Spinel
+        if: steps.spinel-cache.outputs.cache-hit != 'true'
+        env:
+          REVISION: ${{ steps.spinel.outputs.revision }}
+        run: |
+          git clone --filter=blob:none https://github.com/matz/spinel ~/spinel-toolchain
+          cd ~/spinel-toolchain
+          git checkout --quiet "$REVISION"
+          make deps
+          make -j"$(getconf _NPROCESSORS_ONLN)"
+
+      - run: echo "$HOME/spinel-toolchain/bin" >> "$GITHUB_PATH"
+
+      # The tests have no .expected: spin test runs each one under the ruby in PATH
+      # and compares, so that ruby has to be the one they were written against (Psych 5.3)
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "4.0.7"
+
+      - name: Spin test
+        run: spin test
+
+      # The package carries C; a collection every few KB catches a value it forgot to root
+      - name: Spin test under GC stress
+        env:
+          SPINEL_GC_STRESS: "1"
+        run: spin test
