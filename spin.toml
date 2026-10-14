@@ -1,5 +1,5 @@
 [package]
 name = "yaml"
 version = "0.1.0"
-sources = ["native/*.c"]
+sources = ["sp_yaml.c", "native/*.c"]
 exclude = ["vendor"]   # compiled through native/libyaml_*.c, not file by file
