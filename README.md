@@ -117,7 +117,10 @@ spin test                       # each test/*.rb compared against CRuby + Psych
 SPINEL_GC_STRESS=1 spin test    # the same with a collection every few KB
 ```
 
-The tests are written against CRuby 4.0 (Psych 5.3); put its `ruby` first in `PATH`.
+The tests are written against CRuby 4.0 (Psych 5.3); put its `ruby` first in `PATH`. Tested with Spinel `6f88ebcc3` and CRuby 4.0.7.
+
+`.github/workflows/test.yml` runs both on Linux and macOS on every push
+against that Spinel revision, and every day against Spinel master.
 
 ## License
 
