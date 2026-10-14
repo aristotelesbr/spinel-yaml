@@ -495,4 +495,10 @@ module Psych
   end
 end
 
+class Object
+  def to_yaml
+    Psych.dump(self)
+  end
+end
+
 YAML = Psych

@@ -9,4 +9,9 @@ print YAML.dump("adapter" => "sqlite3", "pool" => 5, "database" => "storage/dev.
 shared = { "x" => 1 }
 list = [1, 2]
 print YAML.dump({ "a" => shared, "b" => shared, "c" => list, "d" => [list, shared] })
+print({ "name" => "app", "tags" => ["a", "b"] }.to_yaml)
+print [1, "x"].to_yaml
+print "text".to_yaml
 p YAML.load(YAML.dump({ "a" => ["1", 1, "yes", true, nil, "", "x\ny"] }))
+print YAML.dump({ "a" => { "x" => 1 }, "b" => { "x" => 1 } })
+print YAML.dump([shared, shared.dup, shared])
