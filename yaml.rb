@@ -64,31 +64,38 @@ module Psych
   native_func :events, [:string, :int], :any, "spinel_yaml_events"
   native_func :emit, [:any], :string, "spinel_yaml_emit"
 
-  def self.load(yaml, permitted_classes: [Symbol], aliases: false, filename: nil,
-                fallback: nil, symbolize_names: false)
-    safe_load(yaml, permitted_classes: permitted_classes, aliases: aliases,
-              filename: filename, fallback: fallback, symbolize_names: symbolize_names)
+  def self.load(yaml, permitted_classes: [Symbol], permitted_symbols: [], aliases: false, filename: nil,
+                fallback: nil, symbolize_names: false, freeze: false, strict_integer: false, parse_symbols: true)
+    safe_load(yaml, permitted_classes: permitted_classes, permitted_symbols: permitted_symbols,
+              aliases: aliases, filename: filename, fallback: fallback, symbolize_names: symbolize_names,
+              freeze: freeze, strict_integer: strict_integer, parse_symbols: parse_symbols)
   end
 
-  def self.safe_load(yaml, permitted_classes: [], aliases: false, filename: nil,
-                     fallback: nil, symbolize_names: false)
-    loader = Loader.new(Psych.events(yaml, 0), filename, permitted_classes, aliases, symbolize_names)
+  def self.safe_load(yaml, permitted_classes: [], permitted_symbols: [], aliases: false, filename: nil,
+                     fallback: nil, symbolize_names: false, freeze: false, strict_integer: false,
+                     parse_symbols: true)
+    scanner = ScalarScanner.new(permitted_classes, permitted_symbols: permitted_symbols,
+                                strict_integer: strict_integer, parse_symbols: parse_symbols)
+    loader = Loader.new(Psych.events(yaml, 0), filename, scanner, aliases: aliases,
+                        symbolize_names: symbolize_names, freeze: freeze)
     loader.document? ? loader.document : fallback
   end
 
   # The first document, read without the safe_load restrictions: aliases
   # and Symbols are allowed, and only what this package cannot build
   # (Date, Time, objects) raises.
-  def self.unsafe_load(yaml, filename: nil, fallback: false, symbolize_names: false)
-    loader = Loader.new(Psych.events(yaml, 0), filename, [Symbol], true, symbolize_names, true)
+  def self.unsafe_load(yaml, filename: nil, fallback: false, symbolize_names: false, freeze: false,
+                       strict_integer: false, parse_symbols: true)
+    loader = unsafe_loader(Psych.events(yaml, 0), filename, symbolize_names, freeze, strict_integer, parse_symbols)
     loader.document? ? loader.document : fallback
   end
 
-  # Every document of a stream, read as load reads one but with aliases and
-  # Symbols allowed (Psych builds each with to_ruby, outside safe_load). With
-  # a block each document is yielded instead, and the answer is nil.
-  def self.load_stream(yaml, filename: nil, fallback: [], symbolize_names: false)
-    loader = Loader.new(Psych.events(yaml, 1), filename, [Symbol], true, symbolize_names, true)
+  # Every document of a stream, read as unsafe_load reads one (Psych builds
+  # each with to_ruby, outside safe_load). With a block each document is
+  # yielded instead, and the answer is nil.
+  def self.load_stream(yaml, filename: nil, fallback: [], symbolize_names: false, freeze: false,
+                       strict_integer: false, parse_symbols: true)
+    loader = unsafe_loader(Psych.events(yaml, 1), filename, symbolize_names, freeze, strict_integer, parse_symbols)
     documents = []
     while loader.document?
       if block_given?
@@ -101,24 +108,35 @@ module Psych
     documents.empty? ? fallback : documents
   end
 
+  def self.unsafe_loader(events, filename, symbolize_names, freeze, strict_integer, parse_symbols)
+    scanner = ScalarScanner.new([Symbol], unsafe: true, strict_integer: strict_integer, parse_symbols: parse_symbols)
+    Loader.new(events, filename, scanner, aliases: true, symbolize_names: symbolize_names, freeze: freeze, unsafe: true)
+  end
+
   def self.dump(o)
     Dumper.new.dump(o)
   end
 
-  def self.unsafe_load_file(filename, fallback: false, symbolize_names: false)
-    unsafe_load(File.read(filename), filename: filename, fallback: fallback, symbolize_names: symbolize_names)
+  def self.load_file(filename, permitted_classes: [Symbol], permitted_symbols: [], aliases: false,
+                     fallback: nil, symbolize_names: false, freeze: false, strict_integer: false,
+                     parse_symbols: true)
+    load(File.read(filename), permitted_classes: permitted_classes, permitted_symbols: permitted_symbols,
+         aliases: aliases, filename: filename, fallback: fallback, symbolize_names: symbolize_names,
+         freeze: freeze, strict_integer: strict_integer, parse_symbols: parse_symbols)
   end
 
-  def self.load_file(filename, permitted_classes: [Symbol], aliases: false,
-                     fallback: nil, symbolize_names: false)
-    load(File.read(filename), permitted_classes: permitted_classes, aliases: aliases,
-         filename: filename, fallback: fallback, symbolize_names: symbolize_names)
+  def self.safe_load_file(filename, permitted_classes: [], permitted_symbols: [], aliases: false,
+                          fallback: nil, symbolize_names: false, freeze: false, strict_integer: false,
+                          parse_symbols: true)
+    safe_load(File.read(filename), permitted_classes: permitted_classes, permitted_symbols: permitted_symbols,
+              aliases: aliases, filename: filename, fallback: fallback, symbolize_names: symbolize_names,
+              freeze: freeze, strict_integer: strict_integer, parse_symbols: parse_symbols)
   end
 
-  def self.safe_load_file(filename, permitted_classes: [], aliases: false,
-                          fallback: nil, symbolize_names: false)
-    safe_load(File.read(filename), permitted_classes: permitted_classes, aliases: aliases,
-              filename: filename, fallback: fallback, symbolize_names: symbolize_names)
+  def self.unsafe_load_file(filename, fallback: false, symbolize_names: false, freeze: false,
+                            strict_integer: false, parse_symbols: true)
+    unsafe_load(File.read(filename), filename: filename, fallback: fallback, symbolize_names: symbolize_names,
+                freeze: freeze, strict_integer: strict_integer, parse_symbols: parse_symbols)
   end
 
   # Types a plain scalar by the YAML 1.1 rules; a quoted one stays a String.
@@ -126,15 +144,21 @@ module Psych
     TIME = /^-?\d{4}-\d{1,2}-\d{1,2}(?:[Tt]|\s+)\d{1,2}:\d\d:\d\d(?:\.\d*)?(?:\s*(?:Z|[-+]\d{1,2}:?(?:\d\d)?))?$/
     DATE = /^\d{4}-(?:1[012]|0\d|\d)-(?:[12]\d|3[01]|0\d|\d)$/
     FLOAT = /^(?:[-+]?([0-9][0-9_,]*)?\.[0-9]*([eE][-+][0-9]+)?)$/
-    INTEGER = /^(?:[-+]?0b[_,]*[0-1][0-1_,]*|[-+]?0[_,]*[0-7][0-7_,]*|[-+]?(?:0|[1-9](?:[0-9]|,[0-9]|_[0-9])*)|[-+]?0x[_,]*[0-9a-fA-F][0-9a-fA-F_,]*)$/
+    INTEGER_STRICT = /^(?:[-+]?0b[_]*[0-1][0-1_]*|[-+]?0[_]*[0-7][0-7_]*|[-+]?(0|[1-9][0-9_]*)|[-+]?0x[_]*[0-9a-fA-F][0-9a-fA-F_]*)$/
+    INTEGER_LEGACY = /^(?:[-+]?0b[_,]*[0-1][0-1_,]*|[-+]?0[_,]*[0-7][0-7_,]*|[-+]?(?:0|[1-9](?:[0-9]|,[0-9]|_[0-9])*)|[-+]?0x[_,]*[0-9a-fA-F][0-9a-fA-F_,]*)$/
 
     # A dumping scanner only tells Strings from the rest: a Date or a
     # Symbol is not a String, and nothing is refused. An unsafe one refuses
-    # no class, so a Date or Time it cannot build is not read.
-    def initialize(permitted_classes, dumping = false, unsafe = false)
+    # no class, so a Date or Time it cannot build is not read. A strict one
+    # reads no commas in integers.
+    def initialize(permitted_classes, permitted_symbols: [], dumping: false, unsafe: false,
+                   strict_integer: false, parse_symbols: true)
       @permitted_classes = permitted_classes
+      @permitted_symbols = permitted_symbols.map(&:to_s)
       @dumping = dumping
       @unsafe = unsafe
+      @integer = strict_integer ? INTEGER_STRICT : INTEGER_LEGACY
+      @parse_symbols = parse_symbols
     end
 
     def tokenize(string)
@@ -162,7 +186,7 @@ module Psych
         -Float::INFINITY
       elsif string.match?(/^\.nan$/i)
         Float::NAN
-      elsif string.match?(/^:./)
+      elsif @parse_symbols && string.match?(/^:./)
         if string.match?(/^:(["']).*\1$/)
           symbol(string[2, string.length - 3])
         else
@@ -178,7 +202,7 @@ module Psych
         else
           string.delete(",_").sub(/\.([Ee]|$)/, "\\1").to_f
         end
-      elsif string.match?(INTEGER)
+      elsif string.match?(@integer)
         parse_int(string)
       else
         string
@@ -220,6 +244,9 @@ module Psych
 
     def symbol(name)
       return name.to_sym if @dumping
+      unless @permitted_symbols.empty? || @permitted_symbols.include?(name)
+        raise DisallowedClass.new("load", "Symbol")
+      end
       raise DisallowedClass.new("load", "Symbol") unless @permitted_classes.include?(Symbol)
       name.to_sym
     end
@@ -251,14 +278,17 @@ module Psych
     STR_TAG = "tag:yaml.org,2002:str"
 
     # An unsafe loader reads as to_ruby does, outside safe_load: what it
-    # refuses is only what it cannot build.
-    def initialize(events, filename, permitted_classes, aliases, symbolize_names, unsafe = false)
+    # refuses is only what it cannot build. A freezing one freezes every
+    # String, Array and Hash it builds.
+    def initialize(events, filename, scanner, aliases: false, symbolize_names: false, freeze: false,
+                   unsafe: false)
       @events = events
       @filename = filename
       @aliases = aliases
       @symbolize_names = symbolize_names
+      @freeze = freeze
       @unsafe = unsafe
-      @scanner = ScalarScanner.new(permitted_classes, false, unsafe)
+      @scanner = scanner
       @anchors = {}
       @i = 0
       raise_syntax_error if @events.size >= EVENT_FIELDS && type_at(@events.size - EVENT_FIELDS) == EVENT_ERROR
@@ -295,7 +325,9 @@ module Psych
       @i += EVENT_FIELDS
       type = type_at(e)
       if type == SCALAR
-        register(@events[e + 2], scalar(@events[e + 1], @events[e + 3], @events[e + 4] == 1))
+        value = scalar(@events[e + 1], @events[e + 3], @events[e + 4] == 1)
+        value = value.freeze if @freeze && value.is_a?(String)
+        register(@events[e + 2], value)
       elsif type == ALIAS
         raise AliasesNotEnabled.new unless @aliases
         name = @events[e + 1]
@@ -306,13 +338,13 @@ module Psych
         list = register(@events[e + 2], [])
         list << node while type_at(@i) != SEQUENCE_END
         @i += EVENT_FIELDS
-        list
+        @freeze ? list.freeze : list
       elsif type == MAPPING_START
         collection_tag(@events[e + 3])
         hash = register(@events[e + 2], {})
         mapping(hash) while type_at(@i) != MAPPING_END
         @i += EVENT_FIELDS
-        hash
+        @freeze ? hash.freeze : hash
       else
         raise SyntaxError.new(@filename, @events[e + 6], @events[e + 7], 0, "unexpected event #{type}", nil)
       end
@@ -405,7 +437,7 @@ module Psych
 
     def initialize
       @events = []
-      @scanner = ScalarScanner.new([Symbol], true)
+      @scanner = ScalarScanner.new([Symbol], dumping: true)
       @seen = {}
       @anchor_ids = {}
       @count = 0
